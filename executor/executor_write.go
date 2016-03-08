@@ -641,11 +641,8 @@ func (e *InsertValues) fillRowData(cols []*column.Col, vals []types.Datum) ([]ty
 }
 
 func (e *InsertValues) initDefaultValues(row []types.Datum, marked map[int]struct{}) error {
-	var (
-		pkHandleColOff   int
-		pkHandleCol      *column.Col
-		defaultValueCols []*column.Col
-	)
+	var rewriteValueCol *column.Col
+	var defaultValueCols []*column.Col
 	for i, c := range e.Table.Cols() {
 		if row[i].Kind() != types.KindNull {
 			// Column value is not nil, continue.
@@ -671,8 +668,7 @@ func (e *InsertValues) initDefaultValues(row []types.Datum, marked map[int]struc
 				// Last insert id will be 1, not 3.
 				variable.GetSessionVars(e.ctx).SetLastInsertID(uint64(recordID))
 				// It's used to retry.
-				pkHandleColOff = i
-				pkHandleCol = c
+				rewriteValueCol = c
 			}
 		} else {
 			var err error
@@ -689,7 +685,7 @@ func (e *InsertValues) initDefaultValues(row []types.Datum, marked map[int]struc
 	}
 
 	// It's used to retry.
-	if pkHandleCol == nil {
+	if rewriteValueCol == nil {
 		return nil
 	}
 	cols := make([]ast.ExprNode, len(row))
@@ -707,25 +703,25 @@ func (e *InsertValues) initDefaultValues(row []types.Datum, marked map[int]struc
 	}
 	if len(e.Setlist) > 0 {
 		val := &ast.Assignment{
-			Column: &ast.ColumnName{Name: pkHandleCol.Name},
-			Expr:   ast.NewValueExpr(row[pkHandleColOff].GetValue())}
-		if len(e.Setlist) < pkHandleColOff+1 {
+			Column: &ast.ColumnName{Name: rewriteValueCol.Name},
+			Expr:   ast.NewValueExpr(row[rewriteValueCol.Offset].GetValue())}
+		if len(e.Setlist) < rewriteValueCol.Offset+1 {
 			e.Setlist = append(e.Setlist, val)
 			return nil
 		}
 		setlist := make([]*ast.Assignment, 0, len(e.Setlist)+1)
-		setlist = append(setlist, e.Setlist[:pkHandleColOff]...)
+		setlist = append(setlist, e.Setlist[:rewriteValueCol.Offset]...)
 		setlist = append(setlist, val)
-		e.Setlist = append(setlist, e.Setlist[pkHandleColOff:]...)
+		e.Setlist = append(setlist, e.Setlist[rewriteValueCol.Offset:]...)
 	} else {
-		if len(e.Columns) < pkHandleColOff+1 {
-			e.Columns = append(e.Columns, &ast.ColumnName{Name: pkHandleCol.Name})
+		if len(e.Columns) < rewriteValueCol.Offset+1 {
+			e.Columns = append(e.Columns, &ast.ColumnName{Name: rewriteValueCol.Name})
 			return nil
 		}
 		cols := make([]*ast.ColumnName, 0, len(e.Columns)+1)
-		cols = append(cols, e.Columns[:pkHandleColOff]...)
-		cols = append(cols, &ast.ColumnName{Name: pkHandleCol.Name})
-		e.Columns = append(cols, e.Columns[pkHandleColOff:]...)
+		cols = append(cols, e.Columns[:rewriteValueCol.Offset]...)
+		cols = append(cols, &ast.ColumnName{Name: rewriteValueCol.Name})
+		e.Columns = append(cols, e.Columns[rewriteValueCol.Offset:]...)
 	}
 
 	return nil
